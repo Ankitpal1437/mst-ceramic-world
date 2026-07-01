@@ -18,9 +18,12 @@ bcrypt = Bcrypt(app)
 # Import routes
 from routes.auth import auth_bp
 from routes.products import products_bp
+from routes.admin import admin_bp
 
+# Register blueprints
 app.register_blueprint(auth_bp, url_prefix='/api/auth')
 app.register_blueprint(products_bp, url_prefix='/api/products')
+app.register_blueprint(admin_bp, url_prefix='/api/admin')
 
 @app.route('/')
 def home():
