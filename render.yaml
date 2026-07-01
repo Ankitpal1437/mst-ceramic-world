@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: mst-ceramic-world-api
+    env: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    disk:
+      name: mst-data
+      mountPath: /opt/render/project/src/backend/data
+      sizeGB: 1
+  - type: web
+    name: mst-ceramic-world-web
+    env: static
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
