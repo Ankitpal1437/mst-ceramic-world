@@ -66,8 +66,9 @@ async function loadQuote(){
       <span style="color:var(--brass);font-family:var(--font-h);font-size:22px;font-weight:700">${fmt(q.grand_total)}</span>
     </div>
     <div class="btn-row">
-      <button class="btn btn-brass btn-sm" onclick="rePDF()">📥 Download PDF</button>
-      <button class="btn btn-outline btn-sm" onclick="openStatusModal()">🔄 Change Status</button>
+      <button class="btn btn-copper btn-sm" onclick="rePDF()">📥 Download PDF</button>
+      <button class="btn btn-outline btn-sm" onclick="openStatusModal()">🔄 Status</button>
+      ${q.status==='Draft'?`<button class="btn btn-dark btn-sm" onclick="editQuote()">✏️ Edit</button>`:''}
     </div>
   `;
 
@@ -120,10 +121,13 @@ async function confirmStatusChange(){
 function rePDF(){
   const q=currentQuote;
   if(!q){return;}
-  const baths=typeof q.bathrooms==='string'?JSON.parse(q.bathrooms):q.bathrooms||[];
-  toast('PDF generating...');
-  // Simple PDF reprint
-  window.open(`/quotation/${QID}`, '_blank');
+  toast('PDF ke liye Quote page pe jao aur re-download karo');
+}
+
+function editQuote(){
+  sessionStorage.setItem('edit_quote_id', QID);
+  sessionStorage.setItem('edit_quote_data', JSON.stringify(currentQuote));
+  window.location='/quotation?edit='+QID;
 }
 
 loadQuote();
