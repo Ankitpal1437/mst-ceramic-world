@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% block title %}Quotation · MST{% endblock %}
+{% block content %}
+<div style="padding:14px;max-width:600px;margin:0 auto">
+<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+  <button onclick="history.back()" style="background:var(--paper-dim);border:none;border-radius:8px;padding:8px 12px;cursor:pointer">← Back</button>
+  <div style="font-family:var(--font-h);font-size:16px;font-weight:700" id="q-title">Quotation</div>
+</div>
+
+<div class="card" id="q-info"><div class="empty">Loading...</div></div>
+
+<div class="card">
+  <div class="card-head"><div class="card-title">📊 Status</div></div>
+  <div class="status-flow" id="status-flow"></div>
+</div>
+
+<div class="card">
+  <div class="card-head"><div class="card-title">📋 Edit History</div></div>
+  <div id="q-logs"><div class="empty">No changes</div></div>
+</div>
+
+</div>
+
+<div class="modal-bg" id="status-modal">
+  <div class="modal">
+    <div class="modal-head"><div class="modal-title">Status Change</div><button class="modal-close" onclick="hideModal('status-modal')">✕</button></div>
+    <div id="reason-field" style="display:none">
+      <div style="background:var(--red-tint);color:var(--red);border-radius:8px;padding:10px;font-size:12px;margin-bottom:10px">⚠️ Order confirmed hai — reason mandatory hai</div>
+      <label>Reason *</label><textarea id="change-reason" placeholder="Kyon change kar rahe ho..."></textarea>
+    </div>
+    <div id="new-status-select"></div>
+    <button class="btn btn-dark" style="margin-top:10px" onclick="confirmStatusChange()">Update Status</button>
+  </div>
+</div>
+{% endblock %}
+{% block extra_js %}
+<script src="/static/js/mst_assets.js"></script>
+<script>
+const QID = "{{ qid }}";
+const STATUSES = ['Draft','Sent','Negotiating','Confirmed','Partial Delivery','Delivered','Cancelled','Lost'];
+let currentQuote = null;
+let pendingStatus = null;
+
+async function loadQuote(){
+  const d = await api('GET', `/api/quotations/${QID}`);
+  currentQuote = d.quotation;
+  const q = currentQuote;
+  document.getElementById('q-title').textContent = q.quot_number||'Quotation';
+
+  document.getElementById('q-info').innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:12px">
+      <div>
+        <div style="font-family:var(--font-h);font-size:16px;font-weight:700">${q.customer_name}</div>
+        <div style="font-size:12px;color:var(--muted)">${q.customer_phone||'—'} ${q.customer_site?'· '+q.customer_site:''}</div>
+      </div>
+      <span class="badge ${statusClass(q.status)}">${q.status}</span>
+    </div>
+    <div class="row2" style="gap:8px;font-size:12px;margin-bottom:12px">
+      <div style="background:var(--paper-dim);border-radius:8px;padding:8px"><div style="font-size:10px;color:var(--muted);font-weight:700">QUOT NO</div><div style="font-weight:700">${q.quot_number||'—'}</div></div>
+      <div style="background:var(--paper-dim);border-radius:8px;padding:8px"><div style="font-size:10px;color:var(--muted);font-weight:700">DATE</div><div style="font-weight:700">${q.created_at?.split('T')[0]||'—'}</div></div>
+      <div style="background:var(--paper-dim);border-radius:8px;padding:8px"><div style="font-size:10px;color:var(--muted);font-weight:700">ASSIGNED</div><div style="font-weight:700">${q.assigned_name||'—'}</div></div>
+      <div style="background:var(--paper-dim);border-radius:8px;padding:8px"><div style="font-size:10px;color:var(--muted);font-weight:700">VALID TILL</div><div style="font-weight:700">${q.valid_until||'—'}</div></div>
+    </div>
+    <div style="background:var(--ink);border-radius:10px;padding:14px;display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <span style="color:rgba(255,255,255,0.6);font-size:12px;font-weight:700">GRAND TOTAL</span>
+      <span style="color:var(--brass);font-family:var(--font-h);font-size:22px;font-weight:700">${fmt(q.grand_total)}</span>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-brass btn-sm" onclick="rePDF()">📥 Download PDF</button>
+      <button class="btn btn-outline btn-sm" onclick="openStatusModal()">🔄 Change Status</button>
+    </div>
+  `;
+
+  const STATUSES_ORDERED=['Draft','Sent','Negotiating','Confirmed','Partial Delivery','Delivered'];
+  document.getElementById('status-flow').innerHTML=STATUSES_ORDERED.map(s=>`
+    <div class="status-step ${q.status===s?'active':''}" onclick="quickStatus('${s}')">${s}</div>`).join('');
+
+  const logs=d.logs||[];
+  document.getElementById('q-logs').innerHTML=logs.length?logs.map(l=>`
+    <div style="padding:8px 0;border-bottom:1px solid var(--line);font-size:12px">
+      <div style="font-weight:700">${l.action} by ${l.done_by_name||'—'}</div>
+      ${l.old_status?`<div style="color:var(--muted)">${l.old_status} → ${l.new_status}</div>`:''}
+      ${l.reason?`<div style="color:var(--red);font-size:11px">Reason: ${l.reason}</div>`:''}
+      <div style="color:var(--muted);font-size:11px">${l.created_at?.split('T')[0]||''}</div>
+    </div>`).join(''):'<div class="empty">No changes</div>';
+}
+
+function statusClass(s){const m={'Draft':'badge-muted','Sent':'badge-blue','Negotiating':'badge-brass','Confirmed':'badge-green','Delivered':'badge-green','Cancelled':'badge-red','Lost':'badge-red'};return m[s]||'badge-muted';}
+
+function openStatusModal(){
+  document.getElementById('change-reason').value='';
+  const isConfirmed=['Confirmed','Partial Delivery','Delivered'].includes(currentQuote?.status);
+  document.getElementById('reason-field').style.display=isConfirmed?'block':'none';
+  document.getElementById('new-status-select').innerHTML=`<label>New Status</label><select id="sel-status">`+STATUSES.map(s=>`<option value="${s}" ${s===currentQuote?.status?'selected':''}>${s}</option>`).join('')+`</select>`;
+  showModal('status-modal');
+}
+
+async function quickStatus(status){
+  const isConfirmed=['Confirmed','Partial Delivery','Delivered'].includes(currentQuote?.status);
+  if(isConfirmed){
+    pendingStatus=status;
+    document.getElementById('new-status-select').innerHTML=`<div style="font-size:13px;margin-bottom:8px">Status: <b>${status}</b></div>`;
+    document.getElementById('reason-field').style.display='block';
+    showModal('status-modal');
+  } else {
+    await api('POST',`/api/quotations/${QID}/status`,{status,reason:''});
+    toast('✅ Status updated!'); loadQuote();
+  }
+}
+
+async function confirmStatusChange(){
+  const status=pendingStatus||document.getElementById('sel-status')?.value;
+  const reason=document.getElementById('change-reason').value.trim();
+  const isConfirmed=['Confirmed','Partial Delivery','Delivered'].includes(currentQuote?.status);
+  if(isConfirmed&&!reason){toast('❌ Reason zaroori hai');return;}
+  await api('POST',`/api/quotations/${QID}/status`,{status,reason});
+  hideModal('status-modal'); toast('✅ Updated!'); loadQuote();
+}
+
+function rePDF(){
+  const q=currentQuote;
+  if(!q){return;}
+  const baths=typeof q.bathrooms==='string'?JSON.parse(q.bathrooms):q.bathrooms||[];
+  toast('PDF generating...');
+  // Simple PDF reprint
+  window.open(`/quotation/${QID}`, '_blank');
+}
+
+loadQuote();
+</script>
+{% endblock %}

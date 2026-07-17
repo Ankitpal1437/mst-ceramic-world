@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}Follow-ups · MST{% endblock %}
+{% block content %}
+<div style="padding:14px;max-width:600px;margin:0 auto">
+
+<div class="card">
+  <div class="card-head"><div class="card-title">🔔 Follow-up Add Karo</div></div>
+  <label>Customer Phone</label>
+  <input type="tel" id="f-phone" placeholder="Phone number" oninput="fupPhoneLookup(this.value)">
+  <div id="f-cust-found" style="display:none;background:var(--green-tint);border-radius:8px;padding:8px 10px;font-size:12px;color:var(--green);margin-top:4px"></div>
+  <label>Customer Naam *</label><input type="text" id="f-name" placeholder="Naam">
+  <div class="row2">
+    <div><label>Date *</label><input type="date" id="f-date"></div>
+    <div><label>Priority</label>
+      <select id="f-priority"><option>Normal</option><option>High</option><option>Urgent</option></select>
+    </div>
+  </div>
+  <label>Type</label>
+  <select id="f-type"><option>Price Follow-up</option><option>Order Confirmation</option><option>Payment Collection</option><option>Delivery Update</option><option>After Sales Service</option><option>General Callback</option></select>
+  <label>Notes</label><textarea id="f-notes" placeholder="Kya baat karni hai..."></textarea>
+  <button class="btn btn-dark" style="margin-top:10px" onclick="saveFup()">💾 Save Follow-up</button>
+</div>
+
+<div class="tab-row">
+  <div class="tab-chip active" onclick="showTab('overdue',this)">🔴 Overdue</div>
+  <div class="tab-chip" onclick="showTab('today',this)">🟡 Aaj</div>
+  <div class="tab-chip" onclick="showTab('upcoming',this)">🟢 Upcoming</div>
+</div>
+
+<div id="tab-overdue"><div class="empty">Loading...</div></div>
+<div id="tab-today" style="display:none"><div class="empty">Loading...</div></div>
+<div id="tab-upcoming" style="display:none"><div class="empty">Loading...</div></div>
+
+</div>
+{% endblock %}
+{% block extra_js %}
+<script>
+document.getElementById('f-date').value = new Date().toISOString().split('T')[0];
+
+function showTab(name, el){
+  ['overdue','today','upcoming'].forEach(t=>{document.getElementById('tab-'+t).style.display=t===name?'block':'none';});
+  document.querySelectorAll('.tab-row .tab-chip').forEach(c=>c.classList.remove('active'));
+  el.classList.add('active');
+}
+
+async function fupPhoneLookup(phone){
+  if(phone.length<10){document.getElementById('f-cust-found').style.display='none';return;}
+  const d=await api('GET',`/api/customers/phone/${phone}`);
+  const el=document.getElementById('f-cust-found');
+  if(d.found){el.style.display='block';el.innerHTML=`✅ <b>${d.customer.name}</b>`;document.getElementById('f-name').value=d.customer.name;}
+  else el.style.display='none';
+}
+
+async function saveFup(){
+  const name=document.getElementById('f-name').value.trim();
+  const date=document.getElementById('f-date').value;
+  if(!name||!date){toast('Naam aur date zaroori hai');return;}
+  const res=await api('POST','/api/followups',{
+    customer_name:name, phone:document.getElementById('f-phone').value.trim(),
+    followup_date:date, type:document.getElementById('f-type').value,
+    notes:document.getElementById('f-notes').value.trim(),
+    priority:document.getElementById('f-priority').value
+  });
+  if(res.ok){
+    toast('✅ Follow-up saved!');
+    document.getElementById('f-name').value='';
+    document.getElementById('f-phone').value='';
+    document.getElementById('f-notes').value='';
+    loadFups();
+  }
+}
+
+async function loadFups(){
+  const d=await api('GET','/api/followups');
+  renderFupList('tab-overdue', d.overdue||[], 'overdue-item', 'Koi overdue nahi 🎉');
+  renderFupList('tab-today', d.today||[], 'today-item', 'Aaj koi follow-up nahi');
+  renderFupList('tab-upcoming', d.upcoming||[], 'upcoming-item', 'Koi upcoming nahi');
+}
+
+function renderFupList(elId, list, cls, empty){
+  const el=document.getElementById(elId);
+  if(!list.length){el.innerHTML=`<div class="empty">${empty}</div>`;return;}
+  el.innerHTML=list.map(f=>`
+    <div class="${cls}">
+      <div style="display:flex;justify-content:space-between;align-items:start;gap:8px">
+        <div style="flex:1">
+          <div style="font-weight:700;font-size:13px">${f.customer_name}</div>
+          <div style="font-size:11px;color:var(--muted)">${f.phone||'—'} · ${f.followup_date} · ${f.type}</div>
+          ${f.notes?`<div style="font-size:11px;margin-top:2px">${f.notes}</div>`:''}
+          <span class="badge ${f.priority==='Urgent'?'badge-red':f.priority==='High'?'badge-brass':'badge-muted'}" style="margin-top:4px">${f.priority}</span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:4px">
+          ${f.phone?`<a href="tel:${f.phone}"><button class="btn btn-green btn-sm btn-icon">📞</button></a>`:''}
+          <button class="btn btn-dark btn-sm" onclick="markDone('${f.id}')">✅</button>
+        </div>
+      </div>
+    </div>`).join('');
+}
+
+async function markDone(id){
+  await api('POST',`/api/followups/${id}/done`,{});
+  toast('✅ Done!'); loadFups();
+}
+loadFups();
+</script>
+{% endblock %}

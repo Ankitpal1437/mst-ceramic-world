@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+{% block title %}Customer · MST{% endblock %}
+{% block content %}
+<div style="padding:14px;max-width:600px;margin:0 auto">
+<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+  <button onclick="history.back()" style="background:var(--paper-dim);border:none;border-radius:8px;padding:8px 12px;cursor:pointer">← Back</button>
+  <div style="font-family:var(--font-h);font-size:16px;font-weight:700" id="c-title">Customer</div>
+</div>
+
+<div class="card" id="c-info"><div class="empty">Loading...</div></div>
+
+<div class="card">
+  <div class="card-head"><div class="card-title">📄 Quotations</div>
+    <button class="btn btn-brass btn-sm" onclick="goToQuote()">+ New Quote</button>
+  </div>
+  <div id="c-quotes"><div class="empty">No quotations</div></div>
+</div>
+
+<div class="card">
+  <div class="card-head"><div class="card-title">📅 Follow-ups</div>
+    <button class="btn btn-outline btn-sm" onclick="showModal('add-fup-modal')">+ Add</button>
+  </div>
+  <div id="c-fups"><div class="empty">No follow-ups</div></div>
+</div>
+
+<div class="card">
+  <div class="card-head"><div class="card-title">🏪 Visits</div></div>
+  <div id="c-visits"><div class="empty">No visits recorded</div></div>
+</div>
+</div>
+
+<div class="modal-bg" id="add-fup-modal">
+  <div class="modal">
+    <div class="modal-head"><div class="modal-title">Add Follow-up</div><button class="modal-close" onclick="hideModal('add-fup-modal')">✕</button></div>
+    <label>Date *</label><input type="date" id="fup-date">
+    <label>Type</label>
+    <select id="fup-type"><option>Price Follow-up</option><option>Order Confirmation</option><option>Payment Collection</option><option>Delivery Update</option><option>General Callback</option></select>
+    <label>Notes</label><textarea id="fup-notes" placeholder="Kya baat karni hai..."></textarea>
+    <label>Priority</label>
+    <select id="fup-priority"><option>Normal</option><option>High</option><option>Urgent</option></select>
+    <button class="btn btn-dark" style="margin-top:10px" onclick="addFup()">Save Follow-up</button>
+  </div>
+</div>
+{% endblock %}
+{% block extra_js %}
+<script>
+const CID = "{{ cid }}";
+let customer = null;
+
+async function loadCustomer(){
+  const d = await api('GET', `/api/customers/${CID}`);
+  customer = d.customer;
+  document.getElementById('c-title').textContent = customer.name;
+  
+  document.getElementById('c-info').innerHTML = `
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
+      <div class="avatar" style="width:48px;height:48px;font-size:18px">${initials(customer.name)}</div>
+      <div>
+        <div style="font-family:var(--font-h);font-size:16px;font-weight:700">${customer.name}</div>
+        <div style="font-size:12px;color:var(--muted)">${customer.phone||'—'} ${customer.phone2?'/ '+customer.phone2:''}</div>
+        <span class="badge badge-blue">${customer.status||'New Inquiry'}</span>
+      </div>
+    </div>
+    <div class="row2" style="gap:8px;font-size:12px">
+      ${infoRow('Site',customer.site_name)}${infoRow('Area',customer.area)}
+      ${infoRow('Architect',customer.architect_name)}${infoRow('Budget',customer.budget_range)}
+      ${infoRow('Bathrooms',customer.num_bathrooms)}${infoRow('Stage',customer.construction_stage)}
+      ${infoRow('Assigned To',customer.assigned_name)}${infoRow('Referred By',customer.referred_by)}
+    </div>
+    ${customer.notes?`<div style="margin-top:10px;font-size:12px;color:var(--muted);background:var(--paper-dim);padding:8px;border-radius:8px">${customer.notes}</div>`:''}
+    ${customer.phone?`<a href="tel:${customer.phone}"><button class="btn btn-green btn-sm" style="margin-top:10px;width:auto">📞 Call ${customer.phone}</button></a>`:''}
+  `;
+
+  const quotes = d.quotations || [];
+  document.getElementById('c-quotes').innerHTML = quotes.length ? quotes.map(q=>`
+    <div class="list-item" onclick="window.location='/quotation/${q.id}'" style="cursor:pointer">
+      <div class="li-body">
+        <div class="li-name">${q.quot_number||'—'} <span class="badge ${statusClass(q.status)}">${q.status}</span></div>
+        <div class="li-sub">${fmt(q.grand_total)} · ${q.created_at?.split('T')[0]||''} · ${q.assigned_name||''}</div>
+      </div>
+      <span style="color:var(--muted)">›</span>
+    </div>`).join('') : '<div class="empty">No quotations</div>';
+
+  const fups = d.followups || [];
+  document.getElementById('c-fups').innerHTML = fups.length ? fups.map(f=>`
+    <div class="${f.status==='Pending'&&f.followup_date<new Date().toISOString().split('T')[0]?'overdue-item':f.status==='Pending'?'upcoming-item':'list-item'}">
+      <div style="display:flex;justify-content:space-between;align-items:start">
+        <div>
+          <div style="font-size:12px;font-weight:700">${f.followup_date} · ${f.type}</div>
+          ${f.notes?`<div style="font-size:11px;color:var(--muted)">${f.notes}</div>`:''}
+          <span class="badge ${f.status==='Pending'?'badge-brass':'badge-green'}">${f.status}</span>
+        </div>
+        ${f.status==='Pending'?`<button class="btn btn-green btn-sm" onclick="doneFup('${f.id}')">Done</button>`:''}
+      </div>
+    </div>`).join('') : '<div class="empty">No follow-ups</div>';
+
+  const visits = d.visits || [];
+  document.getElementById('c-visits').innerHTML = visits.length ? visits.map(v=>`
+    <div class="list-item">
+      <div class="li-body">
+        <div class="li-name">${v.visit_date} · ${v.purpose}</div>
+        <div class="li-sub">In: ${v.check_in?.split('T')[1]?.slice(0,5)||''} ${v.check_out?'· Out: '+v.check_out?.split('T')[1]?.slice(0,5):'· Still inside'}</div>
+        ${v.remarks?`<div style="font-size:11px;color:var(--muted)">${v.remarks}</div>`:''}
+      </div>
+    </div>`).join('') : '<div class="empty">No visits</div>';
+
+  document.getElementById('fup-date').value = new Date().toISOString().split('T')[0];
+}
+
+function infoRow(label, val){
+  if(!val) return '';
+  return `<div style="background:var(--paper-dim);border-radius:8px;padding:8px 10px"><div style="font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase">${label}</div><div style="font-size:12px;font-weight:600;margin-top:2px">${val}</div></div>`;
+}
+
+function goToQuote(){
+  sessionStorage.setItem('quote_customer', JSON.stringify({name:customer.name, phone:customer.phone, site:customer.site_name}));
+  window.location='/quotation';
+}
+
+async function addFup(){
+  const date=document.getElementById('fup-date').value;
+  if(!date){toast('Date zaroori hai');return;}
+  const res=await api('POST','/api/followups',{
+    customer_id:CID, customer_name:customer.name, phone:customer.phone||'',
+    followup_date:date, type:document.getElementById('fup-type').value,
+    notes:document.getElementById('fup-notes').value.trim(),
+    priority:document.getElementById('fup-priority').value
+  });
+  if(res.ok){hideModal('add-fup-modal');toast('✅ Follow-up saved!');loadCustomer();}
+}
+
+async function doneFup(id){
+  await api('POST',`/api/followups/${id}/done`,{notes:''});
+  toast('✅ Done!'); loadCustomer();
+}
+
+function statusClass(s){const m={'Draft':'badge-muted','Sent':'badge-blue','Negotiating':'badge-brass','Confirmed':'badge-green','Delivered':'badge-green','Cancelled':'badge-red','Lost':'badge-red'};return m[s]||'badge-muted';}
+loadCustomer();
+</script>
+{% endblock %}
