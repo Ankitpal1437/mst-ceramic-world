@@ -31,6 +31,12 @@
 </div>
 
 <div class="card">
+  <div class="card-head"><div class="card-title">📄 All Quotations</div></div>
+  <input type="text" id="aq-search" placeholder="Search customer naam..." oninput="filterAdminQuotes()" style="margin-bottom:10px">
+  <div id="all-quotations-list"><div class="empty">Loading...</div></div>
+</div>
+
+<div class="card">
   <div class="card-head"><div class="card-title">📋 Activity Log</div></div>
   <div id="activity-log" style="max-height:300px;overflow-y:auto"><div class="empty">Loading...</div></div>
 </div>
@@ -81,9 +87,14 @@ async function loadAdmin(){
     <div class="list-item">
       <div class="avatar">${initials(u.name)}</div>
       <div class="li-body">
-        <div class="li-name">${u.name} <span class="badge ${u.role==='admin'?'badge-red':u.role==='owner'?'badge-brass':'badge-blue'}">${u.role}</span></div>
-        <div class="li-sub">${u.phone||u.email||'—'} · <span class="badge ${u.status==='approved'?'badge-green':'badge-red'}">${u.status}</span></div>
+        <div class="li-name">${u.name} <span class="badge ${u.role==='admin'?'badge-red':u.role==='owner'?'badge-copper':'badge-blue'}">${u.role}</span></div>
+        <div class="li-sub">${u.phone||u.email||'—'} · <span class="badge ${u.status==='approved'?'badge-green':u.status==='inactive'?'badge-muted':'badge-red'}">${u.status}</span></div>
       </div>
+      ${u.role!=='admin'?`
+      <div class="li-actions">
+        ${u.status==='inactive'?`<button class="btn btn-verdigris btn-sm" onclick="unblockUser('${u.id}')">Unblock</button>`:`<button class="btn btn-outline btn-sm" onclick="blockUser('${u.id}')">Block</button>`}
+        <button class="btn btn-alert btn-sm btn-icon" onclick="deleteUser('${u.id}','${u.name}')">🗑️</button>
+      </div>`:''}
     </div>`).join('');
 
   const logList=logs.logs||[];
@@ -92,6 +103,34 @@ async function loadAdmin(){
       <div style="font-weight:700">${l.user_name||'System'} — ${l.action}</div>
       <div style="color:var(--muted)">${l.details||''} · ${l.created_at?.split('T')[0]||''} ${l.created_at?.split('T')[1]?.slice(0,5)||''}</div>
     </div>`).join(''):'<div class="empty">No activity</div>';
+
+  loadAllQuotations();
+}
+
+let allQuotesCache=[];
+async function loadAllQuotations(){
+  const d=await api('GET','/api/admin/all-quotations');
+  allQuotesCache=d.quotations||[];
+  renderAdminQuotes(allQuotesCache);
+}
+
+function filterAdminQuotes(){
+  const q=document.getElementById('aq-search').value.toLowerCase();
+  renderAdminQuotes(allQuotesCache.filter(x=>(x.customer_name||'').toLowerCase().includes(q)));
+}
+
+function renderAdminQuotes(list){
+  const el=document.getElementById('all-quotations-list');
+  if(!list.length){el.innerHTML='<div class="empty">Koi quotation nahi</div>';return;}
+  el.innerHTML=list.map(q=>`
+    <div class="list-item" onclick="window.location='/quotation/${q.id}'" style="cursor:pointer">
+      <div class="avatar">${initials(q.customer_name)}</div>
+      <div class="li-body">
+        <div class="li-name">${q.customer_name} <span class="badge ${q.status==='Confirmed'?'badge-green':q.status==='Draft'?'badge-muted':'badge-blue'}">${q.status}</span></div>
+        <div class="li-sub">${q.quot_number||''} · ₹${(q.grand_total||0).toLocaleString('en-IN')} · ${q.assigned_name||'—'} · ${q.created_at?.split('T')[0]||''}</div>
+      </div>
+      <span style="color:var(--muted)">›</span>
+    </div>`).join('');
 }
 
 async function approveUser(id){
@@ -102,6 +141,20 @@ async function rejectUser(id){
   if(!confirm('Reject karein?')) return;
   await api('POST',`/api/admin/reject-user/${id}`,{});
   toast('User rejected'); loadAdmin();
+}
+async function blockUser(id){
+  if(!confirm('Is user ko block karein? Ye login nahi kar payega.')) return;
+  await api('POST',`/api/admin/block-user/${id}`,{});
+  toast('🚫 User blocked'); loadAdmin();
+}
+async function unblockUser(id){
+  await api('POST',`/api/admin/unblock-user/${id}`,{});
+  toast('✅ User unblocked'); loadAdmin();
+}
+async function deleteUser(id,name){
+  if(!confirm(`${name} ko permanently delete karein? Ye undo nahi ho sakta!`)) return;
+  await api('POST',`/api/admin/delete-user/${id}`,{});
+  toast('🗑️ User deleted'); loadAdmin();
 }
 loadAdmin();
 </script>
