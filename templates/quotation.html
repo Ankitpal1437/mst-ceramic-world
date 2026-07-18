@@ -303,14 +303,27 @@ function renderLine(bId,aKey,it,idx){
   const base=calcUnit(it), unit=it.isLocal?(parseFloat(it.unit_price)||0):base;
   const total=unit*(it.qty||1);
   return `<div class="line-item">
-    ${it.imgUrl?`<img src="${it.imgUrl}" style="width:36px;height:36px;object-fit:contain;border-radius:4px;border:1px solid var(--line);flex-shrink:0" onerror="this.style.display='none'">`:''}
+    <img src="${it.imgUrl||''}" style="width:36px;height:36px;object-fit:contain;border-radius:4px;border:1px solid var(--line);flex-shrink:0;cursor:pointer;${it.imgUrl?'':'background:var(--paper-dim)'}" onerror="this.style.display='none'" onclick="editItemImage(${bId},'${aKey}',${idx})" title="Tap to add/change image">
     <div class="li-info">
       <div class="li-code">${it.code||it.name||'Custom'}${it.color?' · '+it.color:''}${it.tag?' · '+it.tag:''} ${it.isLocal?'<span style="font-size:9px;background:var(--copper-tint);color:var(--copper-deep);padding:1px 5px;border-radius:4px">LOCAL</span>':''}</div>
       <div class="li-desc">${it.description||it.name||''} · Qty ${it.qty}</div>
     </div>
     <div class="li-price">${fmt(total)}</div>
+    <button class="li-remove" style="background:var(--copper-tint);color:var(--copper-deep)" onclick="editItemImage(${bId},'${aKey}',${idx})" title="Add image">📷</button>
     <button class="li-remove" onclick="removeItem(${bId},'${aKey}',${idx})">✕</button>
   </div>`;
+}
+
+function editItemImage(bId,aKey,idx){
+  const b=bathrooms.find(x=>x.id===bId);
+  if(!b) return;
+  const it=b.areas[aKey][idx];
+  const url=prompt('Product image URL daalo:', it.imgUrl||'');
+  if(url!==null){
+    it.imgUrl=url.trim();
+    renderBaths();
+    toast(url.trim()?'✅ Image added':'Image removed');
+  }
 }
 
 function removeItem(bId,aKey,idx){
@@ -557,8 +570,9 @@ async function saveAndPDF(){
   if(editingQuoteId){
     res=await api('PUT',`/api/quotations/${editingQuoteId}`,payload);
     if(res.ok){
-      toast('✅ Quotation updated!');
-      window.location='/quotation/'+editingQuoteId;
+      toast('✅ Updated! PDF generating...');
+      generatePDF(payload,bathtotals,grand,discAmt,afterDisc,gstAmt,final,document.getElementById('q-img').checked,editingQuoteId.slice(0,8).toUpperCase());
+      setTimeout(()=>{ window.location='/quotation/'+editingQuoteId; }, 1200);
       return;
     } else {
       toast('❌ '+(res.error||'Update failed'));
