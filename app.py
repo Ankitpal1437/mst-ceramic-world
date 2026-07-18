@@ -309,7 +309,7 @@ def api_quot_detail(qid):
         existing = sb('GET','mst_quotations',params=f'?id=eq.{qid}&select=status')
         if existing:
             curr = existing[0].get('status','')
-            if curr in ('Confirmed','Partial Delivery','Delivered') and not reason:
+            if curr != 'Draft' and not reason:
                 return jsonify({'ok':False,'error':'Reason zaroori hai confirmed order edit karne ke liye'})
             sb('POST','mst_quotation_logs',{'quotation_id':qid,'action':'Edited','old_status':curr,'new_status':data.get('status',curr),'reason':reason,'done_by':session['user_id'],'done_by_name':session['name']})
         if isinstance(data.get('bathrooms'),(list,dict)):
