@@ -273,13 +273,20 @@ def api_checkout(vid):
     return jsonify({'ok':True})
 
 # ================= QUOTATIONS =================
+def can_access_quote(quote):
+    """Admin can access everything. Others only their own (created_by)."""
+    if session.get('role') == 'admin':
+        return True
+    return quote.get('created_by') == session.get('user_id')
+
 @app.route('/api/quotations', methods=['GET','POST'])
 @login_required
 def api_quotations():
     if request.method == 'POST':
         data = request.json
-        data['assigned_to'] = data.get('assigned_to') or session['user_id']
-        data['assigned_name'] = data.get('assigned_name') or session['name']
+        data['assigned_to'] = session['user_id']
+        data['assigned_name'] = session['name']
+        data['created_by'] = session['user_id']
         data['created_at'] = datetime.now().isoformat()
         data['valid_until'] = (date.today()+timedelta(days=15)).isoformat()
         if isinstance(data.get('bathrooms'),(list,dict)):
@@ -293,50 +300,102 @@ def api_quotations():
     if role=='admin':
         quotes = sb('GET','mst_quotations',params='?select=*&order=created_at.desc&limit=150') or []
     else:
-        quotes = sb('GET','mst_quotations',params=f'?assigned_to=eq.{uid}&select=*&order=created_at.desc&limit=150') or []
+        quotes = sb('GET','mst_quotations',params=f'?created_by=eq.{uid}&select=*&order=created_at.desc&limit=150') or []
     for q in quotes:
         if isinstance(q.get('bathrooms'),str):
             try: q['bathrooms']=json.loads(q['bathrooms'])
             except: q['bathrooms']=[]
     return jsonify({'quotations':quotes})
 
-@app.route('/api/quotations/<qid>', methods=['GET','PUT'])
+@app.route('/api/quotations/<qid>', methods=['GET','PUT','DELETE'])
 @login_required
 def api_quot_detail(qid):
+    existing = sb('GET','mst_quotations',params=f'?id=eq.{qid}&select=*')
+    if not existing: return jsonify({'error':'Not found'}),404
+    quote_record = existing[0]
+
+    if not can_access_quote(quote_record):
+        return jsonify({'ok':False,'error':'You can only access your own quotations'}),403
+
+    if request.method == 'DELETE':
+        sb('DELETE','mst_quotations',params=f'?id=eq.{qid}')
+        return jsonify({'ok':True})
+
     if request.method == 'PUT':
         data = request.json
         reason = data.pop('edit_reason','')
-        existing = sb('GET','mst_quotations',params=f'?id=eq.{qid}&select=status')
-        if existing:
-            curr = existing[0].get('status','')
-            if curr != 'Draft' and not reason:
-                return jsonify({'ok':False,'error':'Reason zaroori hai confirmed order edit karne ke liye'})
-            sb('POST','mst_quotation_logs',{'quotation_id':qid,'action':'Edited','old_status':curr,'new_status':data.get('status',curr),'reason':reason,'done_by':session['user_id'],'done_by_name':session['name']})
+        curr = quote_record.get('status','')
+        if curr != 'Draft' and not reason:
+            return jsonify({'ok':False,'error':'A reason is required to edit a quotation once it has been sent'})
+        sb('POST','mst_quotation_logs',{'quotation_id':qid,'action':'Edited','old_status':curr,'new_status':data.get('status',curr),'reason':reason,'done_by':session['user_id'],'done_by_name':session['name']})
         if isinstance(data.get('bathrooms'),(list,dict)):
             data['bathrooms']=json.dumps(data['bathrooms'])
         result = sb('PATCH','mst_quotations',data,params=f'?id=eq.{qid}')
         return jsonify({'ok':result is not None})
-    quote = sb('GET','mst_quotations',params=f'?id=eq.{qid}&select=*')
-    if not quote: return jsonify({'error':'Not found'}),404
-    q=quote[0]
+
+    q=quote_record
     if isinstance(q.get('bathrooms'),str):
         try: q['bathrooms']=json.loads(q['bathrooms'])
         except: q['bathrooms']=[]
+    if isinstance(q.get('delivery_status'),str):
+        try: q['delivery_status']=json.loads(q['delivery_status'])
+        except: q['delivery_status']={}
     logs = sb('GET','mst_quotation_logs',params=f'?quotation_id=eq.{qid}&select=*&order=created_at.desc') or []
-    return jsonify({'quotation':q,'logs':logs})
+    payments = sb('GET','mst_payments',params=f'?quotation_id=eq.{qid}&select=*&order=payment_date.desc') or []
+    return jsonify({'quotation':q,'logs':logs,'payments':payments})
 
 @app.route('/api/quotations/<qid>/status', methods=['POST'])
 @login_required
 def api_quot_status(qid):
+    existing = sb('GET','mst_quotations',params=f'?id=eq.{qid}&select=*')
+    if not existing: return jsonify({'error':'Not found'}),404
+    if not can_access_quote(existing[0]):
+        return jsonify({'ok':False,'error':'You can only manage your own quotations'}),403
     data = request.json
     new_status, reason = data.get('status'), data.get('reason','')
-    existing = sb('GET','mst_quotations',params=f'?id=eq.{qid}&select=status')
-    old_status = existing[0]['status'] if existing else ''
+    old_status = existing[0]['status']
     update = {'status':new_status}
     if new_status=='Confirmed': update['confirmed_at']=datetime.now().isoformat()
     sb('PATCH','mst_quotations',update,params=f'?id=eq.{qid}')
     sb('POST','mst_quotation_logs',{'quotation_id':qid,'action':'Status Changed','old_status':old_status,'new_status':new_status,'reason':reason,'done_by':session['user_id'],'done_by_name':session['name']})
     return jsonify({'ok':True})
+
+@app.route('/api/quotations/<qid>/delivery', methods=['POST'])
+@login_required
+def api_quot_delivery(qid):
+    """Update per-product delivery status: Ready / Ordered / Delivered"""
+    existing = sb('GET','mst_quotations',params=f'?id=eq.{qid}&select=*')
+    if not existing: return jsonify({'error':'Not found'}),404
+    if not can_access_quote(existing[0]):
+        return jsonify({'ok':False,'error':'Not authorized'}),403
+    data = request.json
+    item_key = data.get('item_key')
+    status = data.get('status')
+    cur_status = existing[0].get('delivery_status','{}')
+    if isinstance(cur_status,str):
+        try: cur_status=json.loads(cur_status)
+        except: cur_status={}
+    cur_status[item_key] = status
+    sb('PATCH','mst_quotations',{'delivery_status':json.dumps(cur_status)},params=f'?id=eq.{qid}')
+    return jsonify({'ok':True})
+
+# ================= PAYMENTS =================
+@app.route('/api/payments', methods=['GET','POST'])
+@login_required
+def api_payments():
+    if request.method == 'POST':
+        data = request.json
+        data['recorded_by'] = session['user_id']
+        data['recorded_by_name'] = session['name']
+        data['created_at'] = datetime.now().isoformat()
+        result = sb('POST','mst_payments',data)
+        return jsonify({'ok':bool(result)})
+    qid = request.args.get('quotation_id','')
+    if qid:
+        payments = sb('GET','mst_payments',params=f'?quotation_id=eq.{qid}&select=*&order=payment_date.desc') or []
+    else:
+        payments = sb('GET','mst_payments',params='?select=*&order=payment_date.desc&limit=100') or []
+    return jsonify({'payments':payments})
 
 # Summary: product-wise quantities across bathrooms for a quotation
 @app.route('/api/quotations/<qid>/summary')
@@ -394,214 +453,4 @@ def api_orders_pending_search():
     if len(q) < 2: return jsonify({'results':[]})
     orders = sb('GET','mst_order_items',params=f'?status=neq.Received&product_code=ilike.*{q}*&select=*&order=ordered_date.desc') or []
     if not orders:
-        orders = sb('GET','mst_order_items',params=f'?status=neq.Received&product_description=ilike.*{q}*&select=*&order=ordered_date.desc') or []
-    return jsonify({'results':orders})
-
-@app.route('/api/orders/<oid>/receive', methods=['POST'])
-@login_required
-def api_order_receive(oid):
-    data = request.json or {}
-    qty_received = data.get('qty_received', 1)
-    order = sb('GET','mst_order_items',params=f'?id=eq.{oid}&select=*')
-    if not order: return jsonify({'ok':False,'error':'Not found'})
-    o = order[0]
-    total_received = (o.get('qty_received') or 0) + qty_received
-    new_status = 'Received' if total_received >= o.get('qty_ordered',1) else 'Partially Received'
-    sb('PATCH','mst_order_items',{
-        'qty_received': total_received, 'status': new_status,
-        'received_date': date.today().isoformat()
-    }, params=f'?id=eq.{oid}')
-    return jsonify({'ok':True,'status':new_status})
-
-@app.route('/api/orders/generate-list/<qid>')
-@login_required
-def api_orders_generate_list(qid):
-    """Generate WhatsApp-friendly order text + create pending order_items"""
-    quote = sb('GET','mst_quotations',params=f'?id=eq.{qid}&select=*')
-    if not quote: return jsonify({'error':'Not found'}),404
-    q = quote[0]
-    baths = q.get('bathrooms','[]')
-    if isinstance(baths,str):
-        try: baths=json.loads(baths)
-        except: baths=[]
-
-    lines = [f"📋 Order List - {date.today().strftime('%d %b %Y')}", f"Customer: {q.get('customer_name','')}", ""]
-    items_to_create = []
-    sno = 1
-    for b in baths:
-        bname = b.get('name','Bathroom')
-        for area_key, items in (b.get('areas') or {}).items():
-            for it in items:
-                code = it.get('code','')
-                desc = it.get('description') or it.get('name','')
-                qty = it.get('qty',1)
-                lines.append(f"{sno}. {code} — {desc} — Qty {qty}")
-                lines.append(f"   Customer: {q.get('customer_name','')} — {bname}")
-                lines.append("")
-                items_to_create.append({
-                    'quotation_id': qid, 'customer_name': q.get('customer_name',''),
-                    'bathroom_name': bname, 'product_code': code, 'product_description': desc,
-                    'qty_ordered': qty, 'status': 'Pending'
-                })
-                sno += 1
-
-    text = '\n'.join(lines)
-    return jsonify({'text': text, 'items': items_to_create})
-
-# ================= FOLLOWUPS =================
-@app.route('/api/followups', methods=['GET','POST'])
-@login_required
-def api_followups():
-    if request.method == 'POST':
-        data = request.json
-        data['assigned_to'] = data.get('assigned_to') or session['user_id']
-        data['assigned_name'] = data.get('assigned_name') or session['name']
-        data['created_at'] = datetime.now().isoformat()
-        result = sb('POST','mst_followups',data)
-        return jsonify({'ok':bool(result)})
-    today = date.today().isoformat()
-    role, uid = session.get('role'), session.get('user_id')
-    if role=='admin':
-        all_f = sb('GET','mst_followups',params='?status=eq.Pending&select=*&order=followup_date.asc') or []
-    else:
-        all_f = sb('GET','mst_followups',params=f'?status=eq.Pending&assigned_to=eq.{uid}&select=*&order=followup_date.asc') or []
-    overdue=[f for f in all_f if f['followup_date']<today]
-    today_f=[f for f in all_f if f['followup_date']==today]
-    upcoming=[f for f in all_f if f['followup_date']>today]
-    return jsonify({'overdue':overdue,'today':today_f,'upcoming':upcoming})
-
-@app.route('/api/followups/<fid>/done', methods=['POST'])
-@login_required
-def api_fup_done(fid):
-    data=request.json or {}
-    sb('PATCH','mst_followups',{'status':'Done','done_notes':data.get('notes',''),'done_at':datetime.now().isoformat()},params=f'?id=eq.{fid}')
-    return jsonify({'ok':True})
-
-# ================= LOCAL PRODUCTS =================
-@app.route('/api/local-products', methods=['GET','POST'])
-@login_required
-def api_local_products():
-    if request.method=='POST':
-        result=sb('POST','mst_local_products',request.json)
-        return jsonify({'ok':bool(result)})
-    prods=sb('GET','mst_local_products',params='?is_active=eq.true&select=*&order=name.asc') or []
-    return jsonify({'products':prods})
-
-# ================= DASHBOARD =================
-@app.route('/api/dashboard')
-@login_required
-def api_dashboard():
-    today=date.today().isoformat()
-    uid, role = session['user_id'], session['role']
-    visitors=sb('GET','mst_visitors',params=f'?visit_date=eq.{today}&select=*&order=check_in.desc') or []
-    inside=[v for v in visitors if not v.get('check_out')]
-    if role=='admin':
-        today_f=sb('GET','mst_followups',params=f'?status=eq.Pending&followup_date=eq.{today}&select=*') or []
-        overdue=sb('GET','mst_followups',params=f'?status=eq.Pending&followup_date=lt.{today}&select=*') or []
-        recent_q=sb('GET','mst_quotations',params='?select=id,quot_number,customer_name,grand_total,status,assigned_name,created_at&order=created_at.desc&limit=10') or []
-    else:
-        today_f=sb('GET','mst_followups',params=f'?status=eq.Pending&followup_date=eq.{today}&assigned_to=eq.{uid}&select=*') or []
-        overdue=sb('GET','mst_followups',params=f'?status=eq.Pending&followup_date=lt.{today}&assigned_to=eq.{uid}&select=*') or []
-        recent_q=sb('GET','mst_quotations',params=f'?assigned_to=eq.{uid}&select=id,quot_number,customer_name,grand_total,status,created_at&order=created_at.desc&limit=10') or []
-    pending_orders = sb('GET','mst_order_items',params='?status=neq.Received&select=id') or []
-    return jsonify({'visitors':visitors,'inside':inside,'today_followups':today_f,'overdue_followups':overdue,'recent_quotes':recent_q,'today_visitor_count':len(visitors),'inside_count':len(inside),'pending_orders_count':len(pending_orders)})
-
-# ================= USERS / ADMIN =================
-@app.route('/api/users/approved')
-@login_required
-def api_approved_users():
-    users=sb('GET','mst_users',params='?status=eq.approved&select=id,name,role') or []
-    return jsonify({'users':users})
-
-@app.route('/api/admin/pending-users')
-@login_required
-def api_pending():
-    if session.get('role')!='admin': return jsonify({'error':'Admin only'}),403
-    users=sb('GET','mst_users',params='?status=eq.pending&select=*&order=created_at.desc') or []
-    return jsonify({'users':users})
-
-@app.route('/api/admin/all-users')
-@login_required
-def api_all_users():
-    if session.get('role')!='admin': return jsonify({'error':'Admin only'}),403
-    users=sb('GET','mst_users',params='?select=*&order=created_at.desc') or []
-    return jsonify({'users':users})
-
-@app.route('/api/admin/approve-user/<uid>', methods=['POST'])
-@login_required
-def api_approve(uid):
-    if session.get('role')!='admin': return jsonify({'error':'Admin only'}),403
-    sb('PATCH','mst_users',{'status':'approved','approved_at':datetime.now().isoformat()},params=f'?id=eq.{uid}')
-    return jsonify({'ok':True})
-
-@app.route('/api/admin/reject-user/<uid>', methods=['POST'])
-@login_required
-def api_reject(uid):
-    if session.get('role')!='admin': return jsonify({'error':'Admin only'}),403
-    sb('PATCH','mst_users',{'status':'rejected'},params=f'?id=eq.{uid}')
-    return jsonify({'ok':True})
-
-@app.route('/api/admin/block-user/<uid>', methods=['POST'])
-@login_required
-def api_block_user(uid):
-    if session.get('role')!='admin': return jsonify({'error':'Admin only'}),403
-    sb('PATCH','mst_users',{'status':'inactive'},params=f'?id=eq.{uid}')
-    return jsonify({'ok':True})
-
-@app.route('/api/admin/unblock-user/<uid>', methods=['POST'])
-@login_required
-def api_unblock_user(uid):
-    if session.get('role')!='admin': return jsonify({'error':'Admin only'}),403
-    sb('PATCH','mst_users',{'status':'approved'},params=f'?id=eq.{uid}')
-    return jsonify({'ok':True})
-
-@app.route('/api/admin/delete-user/<uid>', methods=['POST'])
-@login_required
-def api_delete_user(uid):
-    if session.get('role')!='admin': return jsonify({'error':'Admin only'}),403
-    sb('DELETE','mst_users',params=f'?id=eq.{uid}')
-    return jsonify({'ok':True})
-
-@app.route('/api/admin/all-quotations')
-@login_required
-def api_admin_all_quotations():
-    if session.get('role')!='admin': return jsonify({'error':'Admin only'}),403
-    quotes = sb('GET','mst_quotations',params='?select=*&order=created_at.desc&limit=300') or []
-    for q in quotes:
-        if isinstance(q.get('bathrooms'),str):
-            try: q['bathrooms']=json.loads(q['bathrooms'])
-            except: q['bathrooms']=[]
-    return jsonify({'quotations':quotes})
-
-@app.route('/api/admin/stats')
-@login_required
-def api_admin_stats():
-    if session.get('role')!='admin': return jsonify({'error':'Admin only'}),403
-    today=date.today().isoformat()
-    all_q=sb('GET','mst_quotations',params='?select=status,grand_total,assigned_name') or []
-    all_c=sb('GET','mst_customers',params='?select=id') or []
-    today_v=sb('GET','mst_visitors',params=f'?visit_date=eq.{today}&select=id') or []
-    pend_f=sb('GET','mst_followups',params='?status=eq.Pending&select=id') or []
-    pend_o=sb('GET','mst_order_items',params='?status=neq.Received&select=id') or []
-    confirmed=[q for q in all_q if q['status']=='Confirmed']
-    total_val=sum(float(q.get('grand_total') or 0) for q in confirmed)
-    staff={}
-    for q in all_q:
-        n=q.get('assigned_name','Unknown')
-        if n not in staff: staff[n]={'quotes':0,'confirmed':0,'value':0}
-        staff[n]['quotes']+=1
-        if q['status']=='Confirmed':
-            staff[n]['confirmed']+=1
-            staff[n]['value']+=float(q.get('grand_total') or 0)
-    return jsonify({'total_quotes':len(all_q),'confirmed_orders':len(confirmed),'total_value':total_val,'total_customers':len(all_c),'today_visitors':len(today_v),'pending_followups':len(pend_f),'pending_orders':len(pend_o),'staff_stats':staff})
-
-@app.route('/api/admin/activity-log')
-@login_required
-def api_activity():
-    if session.get('role')!='admin': return jsonify({'error':'Admin only'}),403
-    logs=sb('GET','mst_activity_log',params='?select=*&order=created_at.desc&limit=50') or []
-    return jsonify({'logs':logs})
-
-if __name__=='__main__':
-    port=int(os.environ.get('PORT',5000))
-    app.run(host='0.0.0.0',port=port,debug=False)
+        orders = sb('GET','mst_order_items',params=f'?status=neq.Received&product_d
