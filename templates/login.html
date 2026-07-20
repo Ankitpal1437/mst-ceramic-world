@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>MST Ceramic World — Login</title>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+<div class="login-page">
+  <div class="login-box">
+    <div class="login-logo">M</div>
+    <div class="login-title">MST Ceramic World</div>
+    <div class="login-sub">Jaquar Authorised Dealer · Kalyan-W<br>Staff Login</div>
+    <div id="error-msg" class="error-msg" style="display:none"></div>
+    <label>Phone Number or Email</label>
+    <input type="text" id="identifier" placeholder="Phone ya email" autocomplete="username">
+    <label style="margin-top:10px">Password</label>
+    <input type="password" id="password" placeholder="Password" autocomplete="current-password">
+    <button class="btn btn-dark" style="margin-top:16px" onclick="doLogin()">Sign In →</button>
+    <div style="text-align:center;margin-top:14px">
+      <a href="/register" style="color:var(--copper-deep);font-size:12px;font-weight:600">New user? Register here</a>
+    </div>
+    <div style="text-align:center;margin-top:8px;font-size:11px;color:var(--muted)">Contact Ankit for access approval</div>
+  </div>
+</div>
+<script>
+async function doLogin() {
+  const identifier = document.getElementById('identifier').value.trim();
+  const password = document.getElementById('password').value.trim();
+  const err = document.getElementById('error-msg');
+  err.style.display = 'none';
+  if (!identifier || !password) { err.textContent = 'Sab fields bharein'; err.style.display = 'block'; return; }
+  const res = await fetch('/api/auth/login', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({identifier, password})});
+  const data = await res.json();
+  if (data.ok) { window.location.href = '/home'; }
+  else { err.textContent = data.error || 'Login failed'; err.style.display = 'block'; }
+}
+document.addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+</script>
+</body>
+</html>
